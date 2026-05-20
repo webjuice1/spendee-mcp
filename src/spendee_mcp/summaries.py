@@ -58,6 +58,8 @@ def txn_category(txn: Transaction) -> str:
     category = txn.get("category") or txn.get("category_name") or txn.get("categoryName")
     if isinstance(category, dict):
         category = category.get("name") or category.get("title") or category.get("id")
+    if not category and _text(txn.get("type")).upper() == "TRANSFER":
+        category = "Transfer"
     return _text(category, "Uncategorized")
 
 

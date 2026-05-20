@@ -53,24 +53,30 @@ class SpendeeReadOnlyClient:
         if limit:
             kwargs["limit"] = limit
         result = self._call("wallet_get_transactions", **kwargs)
-        rows = _as_list(result)
+        rows = self.enrich_transactions(_as_list(result))
         wallet_id_str = str(wallet_id)
         filtered = [txn for txn in rows if str(txn.get("wallet_id") or txn.get("walletId") or "") == wallet_id_str]
         return filtered[:limit] if limit else filtered
 
     def get_all_transactions(self, limit_per_wallet: int | None = None) -> list[dict[str, Any]]:
-        transactions: list[dict[str, Any]] = []
-        for wallet in self.list_wallets():
-            wallet_id = wallet.get("id") or wallet.get("wallet_id") or wallet.get("walletId")
-            if not wallet_id:
-                continue
-            wallet_name = wallet.get("name") or wallet.get("title") or str(wallet_id)
-            for txn in self.get_wallet_transactions(wallet_id, limit=limit_per_wallet):
-                if isinstance(txn, dict):
-                    txn.setdefault("wallet", wallet_name)
-                    txn.setdefault("wallet_id", wallet_id)
-                    transactions.append(txn)
-        return transactions
+        kwargs: dict[str, Any] = {}
+        if limit_per_wallet:
+            kwargs["limit"] = limit_per_wallet
+        result = self._call("wallet_get_transactions", **kwargs)
+        return self.enrich_transactions(_as_list(result))
+
+    def enrich_transactions(self, transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Add Spendee UI fields to raw transaction rows.
+
+        The transaction endpoint returns IDs (`category_id`, `wallet_id`) plus note
+        and hashtag data. Claude/Jimmy need the same concepts Mike sees in Spendee:
+        category, note, label, wallet, and currency. Keep the original raw fields and
+        add normalized read-only fields alongside them.
+        """
+
+        category_map = _lookup_by_id(self.list_categories())
+        wallet_map = _lookup_by_id(self.list_wallets())
+        return [_enrich_transaction(txn, category_map=category_map, wallet_map=wallet_map) for txn in transactions]
 
     def _call(self, method_name: str, **kwargs: Any) -> Any:
         method = getattr(self._client, method_name, None)
@@ -94,6 +100,74 @@ def _as_list(value: Any) -> list[dict[str, Any]]:
                 return [item for item in child if isinstance(item, dict)]
         return [value]
     return []
+
+
+def _lookup_by_id(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        row_id = row.get("id") or row.get("category_id") or row.get("wallet_id") or row.get("walletId")
+        if row_id is not None:
+            result[str(row_id)] = row
+    return result
+
+
+def _enrich_transaction(
+    txn: dict[str, Any],
+    *,
+    category_map: dict[str, dict[str, Any]],
+    wallet_map: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    enriched = dict(txn)
+
+    category_id = enriched.get("category_id") or enriched.get("categoryId")
+    category = category_map.get(str(category_id)) if category_id is not None else None
+    if category:
+        enriched.setdefault("category", category.get("name"))
+        enriched.setdefault("category_name", category.get("name"))
+        enriched.setdefault("category_type", category.get("type"))
+        enriched.setdefault("category_color", category.get("color"))
+        enriched.setdefault("category_image_id", category.get("image_id"))
+    elif str(enriched.get("type") or "").upper() == "TRANSFER":
+        enriched.setdefault("category", "Transfer")
+        enriched.setdefault("category_name", "Transfer")
+        enriched.setdefault("category_type", "transfer")
+
+    wallet_id = enriched.get("wallet_id") or enriched.get("walletId")
+    wallet = wallet_map.get(str(wallet_id)) if wallet_id is not None else None
+    if wallet:
+        enriched.setdefault("wallet", wallet.get("name"))
+        enriched.setdefault("wallet_name", wallet.get("name"))
+        enriched.setdefault("currency", wallet.get("currency"))
+        enriched.setdefault("wallet_currency", wallet.get("currency"))
+
+    labels = _normalize_labels(enriched.get("hashtags") or enriched.get("labels") or enriched.get("label"))
+    enriched["labels"] = labels
+    enriched["label"] = ", ".join(labels) if labels else None
+    enriched["note_text"] = enriched.get("note") or enriched.get("description") or enriched.get("name")
+    return enriched
+
+
+def _normalize_labels(value: Any) -> list[str]:
+    if value in (None, "", {}, []):
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, dict):
+        values = value.values()
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = [value]
+
+    labels: list[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            label = item.get("name") or item.get("label") or item.get("title") or item.get("value")
+        else:
+            label = item
+        if label is not None and str(label).strip():
+            labels.append(str(label).strip())
+    return labels
 
 
 @lru_cache(maxsize=1)

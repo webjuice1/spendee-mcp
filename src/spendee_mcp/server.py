@@ -48,10 +48,11 @@ def spendee_get_transactions(
 
     def run() -> list[dict[str, Any]]:
         client = get_client()
+        upstream_limit = None if date_from or date_to else limit
         if wallet_id:
-            rows = client.get_wallet_transactions(wallet_id, limit=limit)
+            rows = client.get_wallet_transactions(wallet_id, limit=upstream_limit)
         else:
-            rows = client.get_all_transactions(limit_per_wallet=limit)
+            rows = client.get_all_transactions(limit_per_wallet=upstream_limit)
         return filter_transactions(rows, wallet=wallet, date_from=date_from, date_to=date_to, limit=limit)
 
     return _guard(run)

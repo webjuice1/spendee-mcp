@@ -95,3 +95,11 @@ def test_duplicate_key_normalizes_date_amount_payee_wallet():
     txn = {"date": "2026-05-01", "amount": "-12.500", "payee": "  Cafe Nero ", "wallet": "Personal"}
 
     assert duplicate_key(txn) == "2026-05-01|-12.50|cafe nero|personal"
+
+
+def test_transfer_transactions_fall_back_to_transfer_category():
+    result = spending_summary(
+        [{"id": "transfer", "date": "2026-05-01", "amount": -1000, "type": "TRANSFER", "wallet": "Business"}]
+    )
+
+    assert result["categories"]["Transfer"]["spent"] == 1000.0
