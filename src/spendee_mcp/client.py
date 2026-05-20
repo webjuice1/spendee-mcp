@@ -46,9 +46,17 @@ class SpendeeReadOnlyClient:
         return _as_list(result)
 
     def get_wallet_transactions(self, wallet_id: str | int, limit: int | None = None) -> list[dict[str, Any]]:
-        result = self._call("wallet_get_transactions", wallet_id=wallet_id)
+        # Upstream `spendee.wallet_get_transactions` does not accept wallet_id;
+        # despite the name it returns transactions across wallets and only accepts
+        # pagination args. Filter locally to keep this adapter wallet-scoped.
+        kwargs: dict[str, Any] = {}
+        if limit:
+            kwargs["limit"] = limit
+        result = self._call("wallet_get_transactions", **kwargs)
         rows = _as_list(result)
-        return rows[:limit] if limit else rows
+        wallet_id_str = str(wallet_id)
+        filtered = [txn for txn in rows if str(txn.get("wallet_id") or txn.get("walletId") or "") == wallet_id_str]
+        return filtered[:limit] if limit else filtered
 
     def get_all_transactions(self, limit_per_wallet: int | None = None) -> list[dict[str, Any]]:
         transactions: list[dict[str, Any]] = []

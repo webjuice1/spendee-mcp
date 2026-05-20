@@ -43,7 +43,7 @@ def _text(value: Any, fallback: str = "") -> str:
 
 
 def _txn_date(txn: Transaction) -> date | None:
-    return _parse_date(txn.get("date") or txn.get("created") or txn.get("transaction_date"))
+    return _parse_date(txn.get("date") or txn.get("start_date") or txn.get("transaction_date") or txn.get("created"))
 
 
 def _txn_amount(txn: Transaction) -> Decimal:
