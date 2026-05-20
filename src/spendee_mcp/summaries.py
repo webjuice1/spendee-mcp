@@ -77,6 +77,32 @@ def txn_currency(txn: Transaction) -> str:
     return _text(currency, "EUR").upper()
 
 
+def txn_note(txn: Transaction) -> str:
+    return _text(txn.get("note_text") or txn.get("note") or txn.get("description") or txn.get("name"))
+
+
+def txn_labels(txn: Transaction) -> list[str]:
+    labels = txn.get("labels") or txn.get("hashtags") or txn.get("label")
+    if labels in (None, "", {}, []):
+        return []
+    if isinstance(labels, str):
+        return [labels.strip()] if labels.strip() else []
+    if isinstance(labels, dict):
+        labels = labels.values()
+    elif not isinstance(labels, list):
+        labels = [labels]
+
+    result: list[str] = []
+    for item in labels:
+        if isinstance(item, dict):
+            value = item.get("name") or item.get("label") or item.get("title") or item.get("value")
+        else:
+            value = item
+        if value is not None and str(value).strip():
+            result.append(str(value).strip())
+    return result
+
+
 def filter_transactions(
     transactions: Iterable[Transaction],
     *,
@@ -139,6 +165,37 @@ def spending_summary(
         "currency_totals": dict(currency_totals),
         "categories": dict(sorted(categories.items(), key=lambda item: item[1]["spent"], reverse=True)),
     }
+
+
+def review_transactions(
+    transactions: Iterable[Transaction],
+    *,
+    wallet: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    selected = filter_transactions(transactions, wallet=wallet, date_from=date_from, date_to=date_to, limit=limit)
+    rows: list[dict[str, Any]] = []
+    for txn in selected:
+        txn_date = _txn_date(txn)
+        amount = _txn_amount(txn)
+        labels = txn_labels(txn)
+        rows.append(
+            {
+                "date": txn_date.isoformat() if txn_date else None,
+                "wallet": txn_wallet(txn),
+                "amount": float(amount),
+                "currency": txn_currency(txn),
+                "category": txn_category(txn),
+                "note": txn_note(txn),
+                "labels": labels,
+                "label": ", ".join(labels) if labels else None,
+                "type": txn.get("type"),
+                "id": txn.get("id"),
+            }
+        )
+    return rows
 
 
 def find_large_transactions(

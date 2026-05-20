@@ -3,6 +3,7 @@ from spendee_mcp.summaries import (
     filter_transactions,
     find_large_transactions,
     find_recurring_candidates,
+    review_transactions,
     spending_summary,
 )
 
@@ -103,3 +104,36 @@ def test_transfer_transactions_fall_back_to_transfer_category():
     )
 
     assert result["categories"]["Transfer"]["spent"] == 1000.0
+
+
+def test_review_transactions_returns_compact_ui_fields():
+    result = review_transactions(
+        [
+            {
+                "id": "tx1",
+                "start_date": "2026-05-13 11:00:00",
+                "amount": "-104.70",
+                "currency": "EUR",
+                "category_name": "Business exp",
+                "note_text": "POS17MAY OPENAI *CHAT",
+                "labels": ["AI", "Software"],
+                "wallet_name": "BOI - Webjuice",
+                "type": "REGULAR",
+            }
+        ]
+    )
+
+    assert result == [
+        {
+            "date": "2026-05-13",
+            "wallet": "BOI - Webjuice",
+            "amount": -104.7,
+            "currency": "EUR",
+            "category": "Business exp",
+            "note": "POS17MAY OPENAI *CHAT",
+            "labels": ["AI", "Software"],
+            "label": "AI, Software",
+            "type": "REGULAR",
+            "id": "tx1",
+        }
+    ]

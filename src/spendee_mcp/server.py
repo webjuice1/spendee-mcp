@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from .client import SpendeeClientError, get_client
-from .summaries import filter_transactions, find_large_transactions, find_recurring_candidates, spending_summary
+from .summaries import filter_transactions, find_large_transactions, find_recurring_candidates, review_transactions, spending_summary
 
 mcp = FastMCP("spendee-readonly")
 
@@ -54,6 +54,22 @@ def spendee_get_transactions(
         else:
             rows = client.get_all_transactions(limit_per_wallet=upstream_limit)
         return filter_transactions(rows, wallet=wallet, date_from=date_from, date_to=date_to, limit=limit)
+
+    return _guard(run)
+
+
+@mcp.tool()
+def spendee_review_transactions(
+    wallet: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]] | dict[str, str]:
+    """Review transactions in a compact Date | Wallet | Amount | Category | Note | Label shape."""
+
+    def run() -> list[dict[str, Any]]:
+        rows = get_client().get_all_transactions(limit_per_wallet=None if date_from or date_to else limit)
+        return review_transactions(rows, wallet=wallet, date_from=date_from, date_to=date_to, limit=limit)
 
     return _guard(run)
 
