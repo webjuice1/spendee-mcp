@@ -1,15 +1,17 @@
 # Spendee MCP
 
-Read-only MCP server for Spendee, built for Claude Desktop / Claude Code / Hermes-compatible MCP clients.
+Read-only MCP server for Spendee, built for Claude Desktop, Claude Code, Hermes, and other MCP-compatible clients.
 
-This project connects to Spendee through the unofficial Python `spendee` package. Spendee does not provide a stable public MCP server or official public developer API, so this is intentionally defensive and read-only.
+This project connects to Spendee through the unofficial Python `spendee` package. Spendee does not provide a stable public MCP server or official public developer API, so this server is intentionally defensive and read-only.
 
 ## Status
 
 - Read-only by design
-- No create/update/delete tools
-- Uses local stdio MCP transport
-- Credentials stay in `.env` or MCP client env
+- No create, update, or delete tools
+- Local stdio MCP transport
+- No database, sync, or cache layer
+- Credentials stay in `.env` or MCP client environment variables
+- MIT licensed
 
 ## Tools exposed
 
@@ -18,17 +20,23 @@ This project connects to Spendee through the unofficial Python `spendee` package
 - `spendee_list_budgets`
 - `spendee_list_categories`
 - `spendee_get_transactions`
+- `spendee_review_transactions`
 - `spendee_spending_summary`
 - `spendee_find_large_transactions`
 - `spendee_find_recurring_candidates`
 
-## Safety notes
+## Safety model
 
-The upstream Spendee API is undocumented and may break.
+This project is built for finance visibility, not account mutation.
 
-Do not add write tools unless you are ready to accept account-data risk. This repo is built for finance visibility, not mutation.
+The server does not expose write tools and should not be extended with transaction creation, update, delete, transfer, or budget mutation tools unless you are deliberately accepting financial account-data risk.
 
-Never commit `.env`.
+Credential handling:
+
+- Never commit `.env`.
+- Use `.env.example` only for placeholders.
+- Use MCP client environment variables when possible.
+- Error messages are scrubbed for password, token, and bearer-token patterns before they are returned to the MCP client.
 
 ## Setup
 
@@ -45,7 +53,7 @@ Edit `.env`:
 
 ```env
 SPENDEE_EMAIL=your@email.com
-SPENDEE_PASSWORD=your-password
+SPENDEE_PASSWORD=replace-with-your-spendee-password
 SPENDEE_READ_ONLY=true
 ```
 
@@ -53,6 +61,12 @@ Run tests:
 
 ```bash
 pytest -q
+```
+
+Run lint:
+
+```bash
+ruff check .
 ```
 
 Run server manually:
@@ -82,7 +96,7 @@ Example:
       "cwd": "/absolute/path/to/spendee-mcp",
       "env": {
         "SPENDEE_EMAIL": "your@email.com",
-        "SPENDEE_PASSWORD": "your-password",
+        "SPENDEE_PASSWORD": "replace-with-your-spendee-password",
         "SPENDEE_READ_ONLY": "true"
       }
     }
@@ -99,6 +113,10 @@ Show my Spendee wallets.
 ```
 
 ```text
+Review my last 50 Spendee transactions in a compact table.
+```
+
+```text
 Summarise my Spendee spending this month by category.
 ```
 
@@ -112,7 +130,11 @@ Find recurring payment candidates.
 
 ## Known limitations
 
-- If your Spendee account uses only Google/Facebook/social login, email/password auth may fail.
+- If your Spendee account uses only Google, Facebook, or another social login, email/password auth may fail.
 - Transaction field names may vary because the Spendee API is undocumented.
-- Some wallet/budget/category response structures may need adjustment after first live test.
-- This project does not store, sync, or cache data. It reads live via the wrapper.
+- Some wallet, budget, category, or transaction response structures may need adjustment after live testing.
+- This project reads live data through the wrapper. It does not store, sync, or cache Spendee data.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
