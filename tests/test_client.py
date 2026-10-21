@@ -52,6 +52,20 @@ def test_get_wallet_transactions_uses_upstream_offset_limit_api_and_filters_wall
     assert result[0]["wallet_id"] == 123
 
 
+def test_list_categories_uses_get_all_user_categories_and_unwraps_result():
+    client = make_client()
+    client._client.get_all_user_categories = lambda: {
+        "result": [
+            {"id": 9, "name": "Business exp", "type": "expense"},
+            {"id": 10, "name": "Phone", "type": "expense"},
+        ]
+    }
+
+    result = client.list_categories()
+
+    assert [row["name"] for row in result] == ["Business exp", "Phone"]
+
+
 def test_enriches_transactions_with_spendee_ui_fields():
     client = make_client()
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Iterable
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from typing import Any
 
 Transaction = dict[str, Any]
 
