@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
@@ -8,13 +9,30 @@ from dotenv import load_dotenv
 
 from .security import safe_error
 
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off"}
+
+
+def writes_allowed() -> bool:
+    """Writes stay off unless an env flag explicitly opts in.
+
+    Enable with ``SPENDEE_ALLOW_WRITES=true`` or ``SPENDEE_READ_ONLY=false``.
+    Unset ``SPENDEE_READ_ONLY`` still means read-only.
+    """
+
+    allow = os.getenv("SPENDEE_ALLOW_WRITES", "").strip().lower()
+    if allow in _TRUTHY:
+        return True
+    read_only = os.getenv("SPENDEE_READ_ONLY", "true").strip().lower()
+    return read_only in _FALSY
+
 
 class SpendeeClientError(RuntimeError):
     """Raised when Spendee cannot be reached or returns unexpected data."""
 
 
 class SpendeeReadOnlyClient:
-    """Thin read-only adapter around the unofficial `spendee` Python package."""
+    """Thin adapter around the unofficial `spendee` Python package."""
 
     def __init__(self, email: str | None = None, password: str | None = None) -> None:
         load_dotenv()
@@ -42,8 +60,87 @@ class SpendeeReadOnlyClient:
         return _as_list(result)
 
     def list_categories(self) -> list[dict[str, Any]]:
+        # Upstream method is get_all_user_categories, not wallet_get_categories.
         result = self._call("get_all_user_categories")
         return _as_list(result)
+
+    def create_transaction(
+        self,
+        *,
+        amount: float,
+        wallet: str | None = None,
+        wallet_id: str | int | None = None,
+        category: str | None = None,
+        category_id: str | int | None = None,
+        date: str | None = None,
+        note: str | None = None,
+        type: str = "expense",
+    ) -> dict[str, Any]:
+        """Create an expense or income via ``Spendee.create_transaction``."""
+
+        self._require_writes()
+        resolved_wallet = self._resolve_row(
+            self.list_wallets(),
+            name=wallet,
+            id_value=wallet_id,
+            kind="wallet",
+        )
+        resolved_category = self._resolve_row(
+            self.list_categories(),
+            name=category,
+            id_value=category_id,
+            kind="category",
+        )
+        signed_amount = _signed_amount(amount, type)
+        start_date = _parse_start_date(date)
+        kwargs: dict[str, Any] = {
+            "wallet_id": _as_int_id(resolved_wallet.get("id") or resolved_wallet.get("wallet_id"), kind="wallet"),
+            "category_id": _as_int_id(
+                resolved_category.get("id") or resolved_category.get("category_id"),
+                kind="category",
+            ),
+            "amount": signed_amount,
+        }
+        if note is not None:
+            kwargs["note"] = note
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        result = self._call("create_transaction", **kwargs)
+        return self._created_transaction(
+            result,
+            wallet=resolved_wallet,
+            category=resolved_category,
+            amount=signed_amount,
+            note=note,
+            start_date=start_date,
+        )
+
+    def create_category(
+        self,
+        name: str,
+        *,
+        type: str = "expense",
+        wallet: str | None = None,
+        wallet_id: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Create an expense or income category via ``Spendee.wallet_create_category``."""
+
+        self._require_writes()
+        kind = _category_or_transaction_type(type)
+        cleaned = (name or "").strip()
+        if not cleaned:
+            raise SpendeeClientError("Category name is required.")
+        kwargs: dict[str, Any] = {"name": cleaned, "type": kind}
+        if wallet is not None or wallet_id is not None:
+            resolved_wallet = self._resolve_row(
+                self.list_wallets(),
+                name=wallet,
+                id_value=wallet_id,
+                kind="wallet",
+            )
+            kwargs["wallet_id"] = _as_int_id(resolved_wallet.get("id") or resolved_wallet.get("wallet_id"), kind="wallet")
+        result = self._call("wallet_create_category", **kwargs)
+        return self._created_category(result, name=cleaned, type=kind)
 
     def get_wallet_transactions(self, wallet_id: str | int, limit: int | None = None) -> list[dict[str, Any]]:
         # Upstream `spendee.wallet_get_transactions` does not accept wallet_id;
@@ -78,6 +175,70 @@ class SpendeeReadOnlyClient:
         wallet_map = _lookup_by_id(self.list_wallets())
         return [_enrich_transaction(txn, category_map=category_map, wallet_map=wallet_map) for txn in transactions]
 
+    def _require_writes(self) -> None:
+        if not writes_allowed():
+            raise SpendeeClientError(
+                "Write tools are disabled. Set SPENDEE_ALLOW_WRITES=true or SPENDEE_READ_ONLY=false to enable them."
+            )
+
+    def _resolve_row(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        name: str | None,
+        id_value: str | int | None,
+        kind: str,
+    ) -> dict[str, Any]:
+        if id_value is not None and str(id_value).strip() != "":
+            ident = str(id_value).strip()
+            for row in rows:
+                if _row_id(row, kind) == ident:
+                    return row
+            raise SpendeeClientError(f"{kind.capitalize()} id not found: {ident}")
+        if name is None or str(name).strip() == "":
+            raise SpendeeClientError(f"Provide {kind} or {kind}_id.")
+        ident = str(name).strip()
+        for row in rows:
+            if _row_id(row, kind) == ident:
+                return row
+        matches = [row for row in rows if str(row.get("name") or "").lower() == ident.lower()]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise SpendeeClientError(f"Multiple {kind}s named {ident!r}. Use {kind}_id.")
+        raise SpendeeClientError(f"{kind.capitalize()} not found: {ident}")
+
+    def _created_transaction(
+        self,
+        result: Any,
+        *,
+        wallet: dict[str, Any],
+        category: dict[str, Any],
+        amount: float,
+        note: str | None,
+        start_date: datetime | None,
+    ) -> dict[str, Any]:
+        payload = _unwrap_created(result, fallback_id_keys=("id", "transaction_id"))
+        payload.setdefault("wallet_id", wallet.get("id") or wallet.get("wallet_id"))
+        payload.setdefault("category_id", category.get("id") or category.get("category_id"))
+        payload.setdefault("amount", amount)
+        if note is not None:
+            payload.setdefault("note", note)
+        if start_date is not None:
+            payload.setdefault("start_date", start_date.strftime("%Y-%m-%d %H:%M:%S"))
+        return self.enrich_transactions([payload])[0]
+
+    def _created_category(self, result: Any, *, name: str, type: str) -> dict[str, Any]:
+        payload = _unwrap_created(result, fallback_id_keys=("id", "category_id"))
+        created_id = payload.get("id") or payload.get("category_id")
+        if created_id is not None:
+            for category in self.list_categories():
+                if _row_id(category, "category") == str(created_id):
+                    return category
+        payload.setdefault("name", name)
+        payload.setdefault("type", type)
+        return payload
+
     def _call(self, method_name: str, **kwargs: Any) -> Any:
         method = getattr(self._client, method_name, None)
         if method is None:
@@ -94,12 +255,70 @@ def _as_list(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
     if isinstance(value, dict):
-        for key in ("items", "wallets", "budgets", "categories", "transactions", "data"):
+        for key in ("items", "wallets", "budgets", "categories", "transactions", "data", "result"):
             child = value.get(key)
             if isinstance(child, list):
                 return [item for item in child if isinstance(item, dict)]
         return [value]
     return []
+
+
+def _row_id(row: dict[str, Any], kind: str) -> str:
+    return str(row.get("id") or row.get(f"{kind}_id") or row.get(f"{kind}Id") or "")
+
+
+def _as_int_id(value: Any, *, kind: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise SpendeeClientError(f"Invalid {kind} id: {value}") from exc
+
+
+def _category_or_transaction_type(value: str | None) -> str:
+    kind = (value or "expense").strip().lower()
+    if kind not in {"expense", "income"}:
+        raise SpendeeClientError("type must be 'expense' or 'income'.")
+    return kind
+
+
+def _signed_amount(amount: float, txn_type: str) -> float:
+    kind = _category_or_transaction_type(txn_type)
+    value = float(amount)
+    return -abs(value) if kind == "expense" else abs(value)
+
+
+def _parse_start_date(value: str | None) -> datetime | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    for fmt, size in (("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%dT%H:%M:%S", 19), ("%Y-%m-%d", 10)):
+        try:
+            return datetime.strptime(text[:size], fmt)
+        except ValueError:
+            continue
+    raise SpendeeClientError(f"Unrecognized date: {value}. Use YYYY-MM-DD or YYYY-MM-DD HH:MM:SS.")
+
+
+def _unwrap_created(result: Any, *, fallback_id_keys: tuple[str, ...]) -> dict[str, Any]:
+    if isinstance(result, list):
+        rows = [item for item in result if isinstance(item, dict)]
+        if rows:
+            return dict(rows[0])
+        return {"id": result}
+    if isinstance(result, dict):
+        payload = dict(result)
+        for key in ("transaction", "category", "data", "result"):
+            child = payload.get(key)
+            if isinstance(child, dict):
+                return dict(child)
+            if isinstance(child, list):
+                rows = [item for item in child if isinstance(item, dict)]
+                if rows:
+                    return dict(rows[0])
+        return payload
+    for key in fallback_id_keys:
+        return {key: result}
+    return {"id": result}
 
 
 def _lookup_by_id(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

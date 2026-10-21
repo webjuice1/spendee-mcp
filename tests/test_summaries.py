@@ -7,7 +7,6 @@ from spendee_mcp.summaries import (
     spending_summary,
 )
 
-
 TRANSACTIONS = [
     {
         "id": "1",

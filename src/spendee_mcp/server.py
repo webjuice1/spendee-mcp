@@ -6,8 +6,14 @@ from typing import Any
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
-from .client import SpendeeClientError, get_client
-from .summaries import filter_transactions, find_large_transactions, find_recurring_candidates, review_transactions, spending_summary
+from .client import SpendeeClientError, get_client, writes_allowed
+from .summaries import (
+    filter_transactions,
+    find_large_transactions,
+    find_recurring_candidates,
+    review_transactions,
+    spending_summary,
+)
 
 mcp = FastMCP("spendee-readonly")
 
@@ -32,8 +38,59 @@ def spendee_list_budgets() -> list[dict[str, Any]] | dict[str, str]:
 
 @mcp.tool()
 def spendee_list_categories() -> list[dict[str, Any]] | dict[str, str]:
-    """List Spendee categories."""
+    """List Spendee categories (from get_all_user_categories)."""
     return _guard(lambda: get_client().list_categories())
+
+
+@mcp.tool()
+def spendee_create_transaction(
+    amount: float,
+    wallet: str | None = None,
+    wallet_id: str | int | None = None,
+    category: str | None = None,
+    category_id: str | int | None = None,
+    date: str | None = None,
+    note: str | None = None,
+    type: str = "expense",
+) -> dict[str, Any]:
+    """Add an expense or income to a Spendee wallet.
+
+    Wallet and category accept a name or id. Disabled unless SPENDEE_ALLOW_WRITES=true
+    or SPENDEE_READ_ONLY=false. Returns the created transaction as Spendee reports it.
+    """
+
+    def run() -> dict[str, Any]:
+        return get_client().create_transaction(
+            amount=amount,
+            wallet=wallet,
+            wallet_id=wallet_id,
+            category=category,
+            category_id=category_id,
+            date=date,
+            note=note,
+            type=type,
+        )
+
+    return _guard_write(run)
+
+
+@mcp.tool()
+def spendee_create_category(
+    name: str,
+    type: str = "expense",
+    wallet: str | None = None,
+    wallet_id: str | int | None = None,
+) -> dict[str, Any]:
+    """Create a Spendee expense or income category.
+
+    Disabled unless SPENDEE_ALLOW_WRITES=true or SPENDEE_READ_ONLY=false.
+    Returns the created category as Spendee reports it.
+    """
+
+    def run() -> dict[str, Any]:
+        return get_client().create_category(name, type=type, wallet=wallet, wallet_id=wallet_id)
+
+    return _guard_write(run)
 
 
 @mcp.tool()
@@ -117,6 +174,13 @@ def spendee_find_recurring_candidates(min_occurrences: int = 3) -> list[dict[str
     return _guard(run)
 
 
+def _writes_disabled_error() -> dict[str, str]:
+    return {
+        "error": "Write tools are disabled. Set SPENDEE_ALLOW_WRITES=true or SPENDEE_READ_ONLY=false to enable them.",
+        "source": "spendee-mcp",
+    }
+
+
 def _guard(fn):
     try:
         return fn()
@@ -124,8 +188,14 @@ def _guard(fn):
         return {"error": str(exc), "source": "spendee-mcp"}
 
 
+def _guard_write(fn):
+    if not writes_allowed():
+        return _writes_disabled_error()
+    return _guard(fn)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Read-only Spendee MCP server")
+    parser = argparse.ArgumentParser(description="Spendee MCP server")
     parser.add_argument("--transport", choices=["stdio"], default="stdio")
     args = parser.parse_args()
     load_dotenv()

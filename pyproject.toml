@@ -10,13 +10,12 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 classifiers = [
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Topic :: Office/Business :: Financial",
 ]
 dependencies = [
-  "mcp>=1.0.0",
+  "mcp>=1.0.0,<2",
   "spendee>=0.9.9.9",
   "python-dotenv>=1.0.0",
 ]
